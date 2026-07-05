@@ -12,7 +12,10 @@ from urllib.parse import urlparse, urljoin
 def get_business_websites(query, max_results=10):
     print("Launching Stealth Browser...")
     
-    # 1. Use the undetected version of Chrome
+    options.add_argument('--headless')                   
+    options.add_argument('--no-sandbox')                
+    options.add_argument('--disable-dev-shm-usage')
+
     options = uc.ChromeOptions()
     driver = uc.Chrome(options=options, version_main=149)
     prefs = {"profile.managed_default_content_settings.images": 2}
