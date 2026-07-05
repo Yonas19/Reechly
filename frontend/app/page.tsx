@@ -51,7 +51,7 @@ export default function Home() {
     setStatusMessage('Launching stealth engine...');
     setStatusType('info');
     try {
-      const response = await fetch('http://localhost:8000/api/scrape', {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/scrape`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, max_results: maxResults }),
