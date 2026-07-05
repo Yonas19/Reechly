@@ -10,76 +10,84 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
 
 def get_business_websites(query, max_results=10):
-    print("Launching Stealth Browser...")
+    # 1. CRASH PROOFING: Initialize driver as None
+    driver = None
+    print("Initializing browser options...")
     
-    options.add_argument('--headless')                   
-    options.add_argument('--no-sandbox')                
-    options.add_argument('--disable-dev-shm-usage')
-
-    options = uc.ChromeOptions()
-    driver = uc.Chrome(options=options, version_main=149)
-    prefs = {"profile.managed_default_content_settings.images": 2}
-    options.add_experimental_option("prefs", prefs)
-    
-    
-    print(f"Searching Google for: {query}...")
-    search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-    driver.get(search_url)
-
-    
-    
-    # 2. THE FIX: The script will pause here.
-    print("\n" + "="*40)
-    print("🚦 CHECK THE BROWSER!")
-    print("If there is a CAPTCHA, solve it now.")
-    print("="*40 + "\n")
-
     try:
-        # Tell Selenium to watch the page for up to 60 seconds.
-        # It is looking for the "div#search" element, which is the container Google uses for search results.
-        WebDriverWait(driver, 60).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div#search"))
-        )
-        print("Search results detected! Extracting links...")
+        # 2. CORRECT SEQUENCE: Create options object FIRST
+        options = uc.ChromeOptions()
+        
+        # 3. Add arguments to the created object
+        options.add_argument('--headless')                   
+        options.add_argument('--no-sandbox')                
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
+
+        # Block images to save bandwidth and memory
+        prefs = {"profile.managed_default_content_settings.images": 2}
+        options.add_experimental_option("prefs", prefs)
+        
+        print("Launching Stealth Browser in Docker...")
+        # REMOVED version_main so undetected-chromedriver matches Docker's Chrome version automatically
+        driver = uc.Chrome(options=options)
+        
+        print(f"Searching Google for: {query}...")
+        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+        driver.get(search_url)
+
+        # 4. Wait for search results container
+        try:
+            WebDriverWait(driver, 60).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div#search"))
+            )
+            print("Search results detected! Extracting links...")
+        except Exception as e:
+            print("Timed out waiting for search results (Google might have shown a CAPTCHA).")
+            return []
+            
+        print("Scrolling to load more results...")
+        for _ in range(5): # Reduced from 15 to 5 to avoid timeouts on free cloud tiers
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+        
+        # 5. Extract website links
+        websites = set()
+        seen_domains = set() 
+        
+        links = driver.find_elements(By.XPATH, "//a[@href]")
+        
+        for link in links:
+            url = link.get_attribute("href")
+            if url and "http" in url:
+                if any(bad in url.lower() for bad in ['google.', 'facebook.', 'instagram.', 'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.']):
+                    continue
+                    
+                clean_url = url.split("?")[0]
+                domain = urlparse(clean_url).netloc.replace('www.', '')
+                
+                if domain and domain not in seen_domains:
+                    seen_domains.add(domain)
+                    websites.add(clean_url)
+                    
+                    if len(websites) >= max_results:
+                        break
+                        
+        return list(websites)
+
     except Exception as e:
-        print("Timed out waiting for search results (or CAPTCHA took longer than 60 seconds).")
-        driver.quit()
+        print(f"An error occurred in get_business_websites: {e}")
         return []
         
-
-    print("Scrolling to load more results...")
-    for _ in range(15): # Scrolls down 5 times
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
-    
-    # 3. Extract website links (NEW FILTERING LOGIC)
-    websites = set()
-    seen_domains = set() # This remembers domains so we don't scan the same site twice
-    
-    links = driver.find_elements(By.XPATH, "//a[@href]")
-    
-    for link in links:
-        url = link.get_attribute("href")
-        if url and "http" in url:
-            
-            # Stricter filter to catch regional variants like .ae or .co.uk
-            if any(bad in url.lower() for bad in ['google.', 'facebook.', 'instagram.', 'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.']):
-                continue
-                
-            clean_url = url.split("?")[0]
-            
-            # Extract just the core domain name (e.g., 'dentzzdental.com')
-            domain = urlparse(clean_url).netloc.replace('www.', '')
-            
-            if domain and domain not in seen_domains:
-                seen_domains.add(domain)
-                websites.add(clean_url)
-                
-                if len(websites) >= max_results:
-                    break
-                    
-    driver.quit()
-    return list(websites)
+    finally:
+        # 6. SAFE CLEANUP: Only quit if the browser instance actually exists
+        if driver is not None:
+            try:
+                driver.quit()
+                print("Browser closed successfully.")
+            except:
+                pass
 
 def extract_emails_from_url(base_url):
     print(f"Hunting for emails on {base_url} and its contact pages...")
@@ -95,38 +103,33 @@ def extract_emails_from_url(base_url):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0'
     }
 
-    # Start our checklist with the homepage
     urls_to_check = [base_url]
 
-    # --- PHASE 1: Find the Contact Page ---
+    # PHASE 1: Find the Contact Page
     try:
         response = requests.get(base_url, headers=headers, timeout=5)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Look for any link on the homepage that mentions 'contact' or 'about'
         contact_found = False
         for link in soup.find_all('a', href=True):
             href = link['href'].lower()
             if 'contact' in href or 'about' in href:
-                # urljoin securely combines "domain.com" + "/contact"
                 contact_url = urljoin(base_url, link['href'])
                 urls_to_check.append(contact_url)
                 contact_found = True
-                break # We just need the first good contact link we find
+                break 
                 
-        # If we couldn't find a button, we guess the most common URLs
         if not contact_found:
             urls_to_check.append(urljoin(base_url, '/contact'))
             urls_to_check.append(urljoin(base_url, '/contact-us'))
             
     except Exception as e:
-        pass # If the homepage fails to load, we just silently move on
+        pass 
 
-    # --- PHASE 2: Scan all identified pages for emails ---
+    # PHASE 2: Scan all identified pages for emails
     bad_prefixes = ['privacy', 'abuse', 'press', 'media', 'webmaster', 'hostmaster', 
                     'noreply', 'no-reply', 'careers', 'jobs', 'news', 'sentry', 'admin']
 
-    # We use set() to remove duplicate URLs so we don't scan the same page twice
     for target_url in set(urls_to_check):
         try:
             resp = requests.get(target_url, headers=headers, timeout=5)
@@ -140,15 +143,12 @@ def extract_emails_from_url(base_url):
                 except ValueError:
                     continue
 
-                # 1. Filter out fake emails (images, system files)
                 if any(ext in email_lower for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.js', '.css']):
                     continue
                     
-                # 2. Filter out junk prefixes
                 if any(bad in local_part for bad in bad_prefixes):
                     continue
                     
-                # 3. Keep domain matches or common freemails
                 if email_domain == site_domain or email_domain in ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com']:
                     emails.add(email_lower)
                     
@@ -156,14 +156,13 @@ def extract_emails_from_url(base_url):
             continue
 
     return list(emails)
+
 if __name__ == "__main__":
     test_query = "dental clinics in Miami"
     print(f"Starting pipeline for: {test_query}\n")
     
-    # 1. Get the websites using Selenium
-    found_sites = get_business_websites(test_query, max_results=60) 
+    found_sites = get_business_websites(test_query, max_results=5) 
     
-    # 2. Scan each website for emails
     results = []
     for site in found_sites:
         emails = extract_emails_from_url(site)
@@ -172,7 +171,6 @@ if __name__ == "__main__":
             "emails": emails
         })
     
-    # 3. Print the final results!
     print("\n--- FINAL RESULTS ---")
     for result in results:
         print(f"Website: {result['website']}")
