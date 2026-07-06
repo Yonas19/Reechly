@@ -42,37 +42,33 @@ class EmailRequest(BaseModel):
 
 
 @app.post("/api/scrape")
+@app.post("/api/scrape")
 def run_scraper(request: SearchRequest):
     try:
-  
         sites = get_business_websites(request.query, max_results=request.max_results)
-        
         results = []
         
-   
-        print(f"Spinning up 10 workers to scan {len(sites)} sites...")
+        # DOWNGRADED to 3 workers so Render's free tier CPU doesn't crash and timeout
+        print(f"Spinning up 3 workers to scan {len(sites)} sites...")
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-       
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             future_to_url = {executor.submit(extract_emails_from_url, site): site for site in sites}
             
-         
             for future in concurrent.futures.as_completed(future_to_url):
                 site = future_to_url[future]
                 try:
                     emails = future.result()
+                    # We will now return the site even if 0 emails are found so your UI shows the progress
                     if emails:
-                        results.append({
-                            "website": site,
-                            "emails": emails
-                        })
+                        results.append({"website": site, "emails": emails})
+                    else:
+                        results.append({"website": site, "emails": ["No emails found on site"]})
                 except Exception as e:
                     print(f"Worker crashed on {site}: {e}")
                 
         return {"status": "success", "data": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-# --- Endpoint 2: The Email Sender ---
 @app.post("/api/send")
 def send_emails(request: EmailRequest):
     if not request.target_emails:

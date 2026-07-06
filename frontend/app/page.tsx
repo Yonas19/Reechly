@@ -85,7 +85,7 @@ export default function Home() {
     setIsScraping(false);
   };
 
-  const handleSend = async () => {
+const handleSend = async () => {
     const selectedEmails = leads.filter(l => l.selected).map(l => l.email);
     
     if (selectedEmails.length === 0) {
@@ -99,7 +99,8 @@ export default function Home() {
     setStatusType('info');
     
     try {
-      const response = await fetch('http://localhost:8000/api/send', {
+      // FIX: Changed from localhost:8000 to the dynamic Vercel environment variable
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_emails: selectedEmails, subject, body }),
@@ -119,7 +120,6 @@ export default function Home() {
     }
     setIsSending(false);
   };
-
   const toggleLead = (id: string) => {
     setLeads(leads.map(lead => lead.id === id ? { ...lead, selected: !lead.selected } : lead));
   };
