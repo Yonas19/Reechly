@@ -3,11 +3,14 @@ from selenium.webdriver.common.by import By
 import time
 import re
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, urljoin
+import urllib3
+
+# Disable SSL warning noise in logs due to verify=False overrides
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def get_business_websites(query, max_results=10):
     # 1. CRASH PROOFING: Initialize driver as None
@@ -101,8 +104,17 @@ def get_business_websites(query, max_results=10):
             except:
                 pass
 
+def decode_cloudflare_email(encoded_string):
+    """Decrypts Cloudflare obfuscated emails into plain text."""
+    try:
+        r = int(encoded_string[:2], 16)
+        email = ''.join([chr(int(encoded_string[i:i+2], 16) ^ r) for i in range(2, len(encoded_string), 2)])
+        return email
+    except Exception:
+        return None
+
 def extract_emails_from_url(base_url):
-    print(f"Hunting for emails on {base_url}...")
+    print(f"\n--- Scanning Site: {base_url} ---")
     emails = set()
     
     try:
@@ -111,53 +123,79 @@ def extract_emails_from_url(base_url):
         site_domain = ""
 
     email_pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
-    
-    # Updated headers to mimic a modern desktop browser accurately
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5'
     }
 
+    # Verify or add scheme if missing
+    if not base_url.startswith('http'):
+        base_url = 'https://' + base_url
+
     urls_to_check = [base_url]
 
-    # PHASE 1: Find the Contact Page
+    # PHASE 1: Find the Contact/About Page links
     try:
-        response = requests.get(base_url, headers=headers, timeout=7)
-        print(f"-> Homepage status for {base_url}: {response.status_code}")
+        # verify=False bypasses faulty/expired strict SSL certificate handshakes
+        response = requests.get(base_url, headers=headers, timeout=12, verify=False)
+        print(f"-> Homepage Connection Status: {response.status_code}")
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
         contact_found = False
         for link in soup.find_all('a', href=True):
             href = link['href'].lower()
-            if 'contact' in href or 'about' in href:
+            if any(kwd in href for kwd in ['contact', 'about', 'info', 'reach', 'team']):
                 contact_url = urljoin(base_url, link['href'])
-                urls_to_check.append(contact_url)
-                contact_found = True
+                # Only check internal links to save time and block tracker jumps
+                if urlparse(contact_url).netloc.replace('www.', '') == site_domain:
+                    urls_to_check.append(contact_url)
+                    contact_found = True
                 
         if not contact_found:
             urls_to_check.append(urljoin(base_url, '/contact'))
             urls_to_check.append(urljoin(base_url, '/contact-us'))
+            urls_to_check.append(urljoin(base_url, '/about'))
             
     except Exception as e:
-        print(f"-> Could not connect to homepage {base_url}: {e}")
+        print(f"-> Setup Error: Could not connect to homepage base URL: {e}")
+
+    # Remove duplicate URLs to ensure clean scanning loops
+    urls_to_check = list(set(urls_to_check))
+    print(f"-> Targeted pages to scan for emails: {urls_to_check}")
 
     # PHASE 2: Scan pages for emails
     bad_prefixes = ['privacy', 'abuse', 'press', 'media', 'webmaster', 'hostmaster', 
                     'noreply', 'no-reply', 'careers', 'jobs', 'news', 'sentry', 'admin']
 
-    for target_url in set(urls_to_check):
+    for target_url in urls_to_check:
         try:
-            resp = requests.get(target_url, headers=headers, timeout=7)
-            if resp.status_code != 200:
-                print(f"   Skipping page {target_url} (Status: {resp.status_code})")
-                continue
-                
-            found_emails = re.findall(email_pattern, resp.text)
+            print(f"   Scraping target page: {target_url}...")
+            resp = requests.get(target_url, headers=headers, timeout=12, verify=False)
             
+            if resp.status_code != 200:
+                print(f"   ⚠️ Skipped page (Status Code: {resp.status_code})")
+                continue
+            
+            # DELAY INJECTION: Yield a short settlement buffer for chunks to stabilize
+            time.sleep(1.5)
+                
+            # A. Check for Cloudflare Obfuscated Emails
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            cf_emails = soup.find_all(class_='__cf_email__')
+            for cf in cf_emails:
+                data_value = cf.get('data-cfemail')
+                if data_value:
+                    decoded = decode_cloudflare_email(data_value)
+                    if decoded:
+                        print(f"   [Cloudflare Bypass] Found Decrypted Email: {decoded}")
+                        emails.add(decoded.lower())
+            
+            # B. Standard fallback regular expression match
+            found_emails = re.findall(email_pattern, resp.text)
             if found_emails:
-                print(f"   Raw text regex matches on {target_url}: {found_emails}")
+                print(f"   Found Regular Regex Email Matches: {found_emails}")
             
             for email in found_emails:
                 email_lower = email.lower()
@@ -167,21 +205,20 @@ def extract_emails_from_url(base_url):
                 except ValueError:
                     continue
 
-                # 1. Clean out code extensions captured by loose regex
-                if any(ext in email_lower for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.js', '.css', '.svg']):
+                # Filter out asset files matched accidentally by open regexes
+                if any(ext in email_lower for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.js', '.css', '.svg', '.ico']):
                     continue
                     
-                # 2. Filter system prefixes
                 if any(bad in local_part for bad in bad_prefixes):
                     continue
                     
-                # 3. Verified functional format inclusion
                 emails.add(email_lower)
                     
-        except Exception as e:
+        except Exception as page_error:
+            print(f"   ❌ Network/Parsing error on page {target_url}: {page_error}")
             continue
 
-    print(f"-> Total verified emails kept for {base_url}: {list(emails)}")
+    print(f"-> Final verified list for {base_url}: {list(emails)}")
     return list(emails)
     
 if __name__ == "__main__":
