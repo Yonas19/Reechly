@@ -90,7 +90,7 @@ def get_business_websites(query, max_results=10):
                 pass
 
 def extract_emails_from_url(base_url):
-    print(f"Hunting for emails on {base_url} and its contact pages...")
+    print(f"Hunting for emails on {base_url}...")
     emails = set()
     
     try:
@@ -99,15 +99,21 @@ def extract_emails_from_url(base_url):
         site_domain = ""
 
     email_pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    
+    # Updated headers to mimic a modern desktop browser accurately
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
     }
 
     urls_to_check = [base_url]
 
     # PHASE 1: Find the Contact Page
     try:
-        response = requests.get(base_url, headers=headers, timeout=5)
+        response = requests.get(base_url, headers=headers, timeout=7)
+        print(f"-> Homepage status for {base_url}: {response.status_code}")
+        
         soup = BeautifulSoup(response.text, 'html.parser')
         
         contact_found = False
@@ -117,23 +123,29 @@ def extract_emails_from_url(base_url):
                 contact_url = urljoin(base_url, link['href'])
                 urls_to_check.append(contact_url)
                 contact_found = True
-                break 
                 
         if not contact_found:
             urls_to_check.append(urljoin(base_url, '/contact'))
             urls_to_check.append(urljoin(base_url, '/contact-us'))
             
     except Exception as e:
-        pass 
+        print(f"-> Could not connect to homepage {base_url}: {e}")
 
-    # PHASE 2: Scan all identified pages for emails
+    # PHASE 2: Scan pages for emails
     bad_prefixes = ['privacy', 'abuse', 'press', 'media', 'webmaster', 'hostmaster', 
                     'noreply', 'no-reply', 'careers', 'jobs', 'news', 'sentry', 'admin']
 
     for target_url in set(urls_to_check):
         try:
-            resp = requests.get(target_url, headers=headers, timeout=5)
+            resp = requests.get(target_url, headers=headers, timeout=7)
+            if resp.status_code != 200:
+                print(f"   Skipping page {target_url} (Status: {resp.status_code})")
+                continue
+                
             found_emails = re.findall(email_pattern, resp.text)
+            
+            if found_emails:
+                print(f"   Raw text regex matches on {target_url}: {found_emails}")
             
             for email in found_emails:
                 email_lower = email.lower()
@@ -143,20 +155,24 @@ def extract_emails_from_url(base_url):
                 except ValueError:
                     continue
 
-                if any(ext in email_lower for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.js', '.css']):
+                # 1. Clean out code extensions captured by loose regex
+                if any(ext in email_lower for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.js', '.css', '.svg']):
                     continue
                     
+                # 2. Filter system prefixes
                 if any(bad in local_part for bad in bad_prefixes):
                     continue
                     
-                if email_domain == site_domain or email_domain in ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com']:
-                    emails.add(email_lower)
+                # 3. LOOSENED FILTER: Accept the email if it meets standard structure.
+                # Removed the strict equal-to-domain matching block to allow third-party domains.
+                emails.add(email_lower)
                     
         except Exception as e:
             continue
 
+    print(f"-> Total verified emails kept for {base_url}: {list(emails)}")
     return list(emails)
-
+    
 if __name__ == "__main__":
     test_query = "dental clinics in Miami"
     print(f"Starting pipeline for: {test_query}\n")
