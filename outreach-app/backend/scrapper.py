@@ -15,10 +15,10 @@ def get_business_websites(query, max_results=10):
     print("Initializing browser options...")
     
     try:
-        # 2. CORRECT SEQUENCE: Create options object FIRST
+        # 2. Create options object
         options = uc.ChromeOptions()
         
-        # 3. Add arguments to the created object
+        # 3. Add arguments for Docker container environment compatibility
         options.add_argument('--headless')                   
         options.add_argument('--no-sandbox')                
         options.add_argument('--disable-dev-shm-usage')
@@ -30,25 +30,25 @@ def get_business_websites(query, max_results=10):
         options.add_experimental_option("prefs", prefs)
         
         print("Launching Stealth Browser in Docker...")
-        # REMOVED version_main so undetected-chromedriver matches Docker's Chrome version automatically
         driver = uc.Chrome(options=options)
         
-        print(f"Searching Google for: {query}...")
-        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+        # --- BING SEARCH LOGIC TO BYPASS DATACENTER CAPTCHAs ---
+        print(f"Searching Bing for: {query}...")
+        search_url = f"https://www.bing.com/search?q={query.replace(' ', '+')}"
         driver.get(search_url)
 
-        # 4. Wait for search results container
+        # 4. Wait for Bing's main search results container (ID is 'b_results')
         try:
             WebDriverWait(driver, 60).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div#search"))
+                EC.presence_of_element_located((By.ID, "b_results"))
             )
             print("Search results detected! Extracting links...")
         except Exception as e:
-            print("Timed out waiting for search results (Google might have shown a CAPTCHA).")
+            print("Timed out waiting for search results. Bing might have blocked the IP or layout changed.")
             return []
             
         print("Scrolling to load more results...")
-        for _ in range(5): # Reduced from 15 to 5 to avoid timeouts on free cloud tiers
+        for _ in range(5): 
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
         
@@ -56,23 +56,35 @@ def get_business_websites(query, max_results=10):
         websites = set()
         seen_domains = set() 
         
-        links = driver.find_elements(By.XPATH, "//a[@href]")
+        # Bing organic results are structured within 'li.b_algo h2 a' elements
+        links = driver.find_elements(By.CSS_SELECTOR, "li.b_algo h2 a")
+        
+        # Fallback to grab structural links if selectors shift layout
+        if not links:
+            links = driver.find_elements(By.XPATH, "//a[@href]")
         
         for link in links:
-            url = link.get_attribute("href")
-            if url and "http" in url:
-                if any(bad in url.lower() for bad in ['google.', 'facebook.', 'instagram.', 'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.']):
-                    continue
+            try:
+                url = link.get_attribute("href")
+                if url and "http" in url:
+                    # Ignore search engines, social platforms, and major directories
+                    if any(bad in url.lower() for bad in [
+                        'google.', 'bing.', 'microsoft.', 'facebook.', 'instagram.', 
+                        'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.'
+                    ]):
+                        continue
+                        
+                    clean_url = url.split("?")[0]
+                    domain = urlparse(clean_url).netloc.replace('www.', '')
                     
-                clean_url = url.split("?")[0]
-                domain = urlparse(clean_url).netloc.replace('www.', '')
-                
-                if domain and domain not in seen_domains:
-                    seen_domains.add(domain)
-                    websites.add(clean_url)
-                    
-                    if len(websites) >= max_results:
-                        break
+                    if domain and domain not in seen_domains:
+                        seen_domains.add(domain)
+                        websites.add(clean_url)
+                        
+                        if len(websites) >= max_results:
+                            break
+            except Exception:
+                continue
                         
         return list(websites)
 
@@ -163,8 +175,7 @@ def extract_emails_from_url(base_url):
                 if any(bad in local_part for bad in bad_prefixes):
                     continue
                     
-                # 3. LOOSENED FILTER: Accept the email if it meets standard structure.
-                # Removed the strict equal-to-domain matching block to allow third-party domains.
+                # 3. Verified functional format inclusion
                 emails.add(email_lower)
                     
         except Exception as e:
