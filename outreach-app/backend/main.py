@@ -29,6 +29,10 @@ load_dotenv()
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")     # Replace with your Gmail
 APP_PASSWORD = os.getenv("APP_PASSWORD") # Replace with your App Password
 
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "Reechly API is running."}
+
 
 class SearchRequest(BaseModel):
     query: str

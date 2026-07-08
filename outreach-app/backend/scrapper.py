@@ -4,7 +4,7 @@ import requests
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 import urllib3
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 # Disable SSL warning noise in logs due to verify=False overrides
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

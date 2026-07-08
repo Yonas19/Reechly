@@ -3,6 +3,6 @@ uvicorn[standard]
 python-dotenv
 requests
 beautifulsoup4
-duckduckgo-search
+ddgs
 pydantic
 gunicorn
