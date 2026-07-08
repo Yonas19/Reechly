@@ -61,11 +61,9 @@ def run_scraper(request: SearchRequest):
                 site = future_to_url[future]
                 try:
                     emails = future.result()
-                    # We will now return the site even if 0 emails are found so your UI shows the progress
+                    # Only include results where at least one email was found.
                     if emails:
                         results.append({"website": site, "emails": emails})
-                    else:
-                        results.append({"website": site, "emails": ["No emails found on site"]})
                 except Exception as e:
                     print(f"Worker crashed on {site}: {e}")
                 
