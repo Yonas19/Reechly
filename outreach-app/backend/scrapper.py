@@ -32,17 +32,45 @@ def get_business_websites(query, max_results=10):
                 if not url:
                     continue
 
-                # Ignore search engines, social platforms, and major directories
-                if any(bad in url.lower() for bad in [
+                # --- NEW, MORE AGGRESSIVE FILTERING ---
+                
+                # 1. Domain Blacklist: Ignore major platforms, news sites, and known directories.
+                domain_blacklist = [
                     'google.', 'bing.', 'duckduckgo.', 'facebook.', 'instagram.',
                     'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.',
-                    'youtube.com', 'wikipedia.org', 'microsoft.'
-                ]):
+                    'youtube.com', 'wikipedia.org', 'microsoft.', 'amazon.', 'forbes.',
+                    'bloomberg.', 'wsj.', 'nytimes.', 'theguardian.', 'bbc.', 'techcrunch.',
+                    'thenationalnews.', 'gulfnews.', 'khaleejtimes.', 'timeoutdubai.'
+                ]
+                if any(bad_domain in url.lower() for bad_domain in domain_blacklist):
                     continue
 
+                # 2. Path Blacklist: Ignore URLs that look like articles, blogs, or user profiles.
+                # This is key to avoiding listicles and news reports.
+                path_blacklist = [
+                    '/blog/', '/news/', '/article/', '/articles/', '/post/', '/posts/',
+                    '/review/', '/reviews/', '/directory/', '/list/', '/top-10/', '/gallery/',
+                    '/author/', '/user/', '/topic/'
+                ]
                 try:
-                    clean_url = url.split("?")[0]
-                    domain = urlparse(clean_url).netloc.replace('www.', '')
+                    parsed_url = urlparse(url)
+                    if any(bad_path in parsed_url.path.lower() for bad_path in path_blacklist):
+                        continue
+                except Exception:
+                    # If urlparse fails, it's a malformed URL, skip it.
+                    continue
+                
+                # 3. Filetype Blacklist: Ignore direct links to files.
+                if parsed_url.path.lower().endswith(('.pdf', '.jpg', '.jpeg', '.png', '.zip', '.docx', '.xls', '.svg')):
+                    continue
+
+                # --- END OF NEW FILTERING ---
+
+                try:
+                    # We want the root of the website to start our scan.
+                    # e.g., from 'https://www.somegym.com/about/team.html' we get 'https://www.somegym.com'
+                    clean_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                    domain = parsed_url.netloc.replace('www.', '')
 
                     if domain and domain not in seen_domains:
                         seen_domains.add(domain)
