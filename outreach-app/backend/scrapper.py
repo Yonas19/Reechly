@@ -1,108 +1,64 @@
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
 import time
 import re
 import requests
 from urllib.parse import urlparse, urljoin
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import urllib3
+from duckduckgo_search import DDGS
 
 # Disable SSL warning noise in logs due to verify=False overrides
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def get_business_websites(query, max_results=10):
-    # 1. CRASH PROOFING: Initialize driver as None
-    driver = None
-    print("Initializing browser options...")
-    
+    """
+    Uses DuckDuckGo Search to find websites, avoiding the need for a browser like Selenium.
+    This is much more lightweight and suitable for server environments like Render.
+    """
+    print(f"Searching DuckDuckGo for: {query}...")
+    websites = set()
+    seen_domains = set()
+
     try:
-        # 2. Create options object
-        options = uc.ChromeOptions()
-        
-        # 3. Add arguments for Docker container environment compatibility
-        options.add_argument('--headless')                   
-        options.add_argument('--no-sandbox')                
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--disable-software-rasterizer')
+        # Use DDGS context manager for clean handling. Fetch more results to have enough to filter.
+        with DDGS() as ddgs:
+            # ddgs.text returns a generator of results
+            search_results = ddgs.text(query, max_results=max_results * 4)
+            if not search_results:
+                print("No results from search engine.")
+                return []
 
-        # Block images to save bandwidth and memory
-        prefs = {"profile.managed_default_content_settings.images": 2}
-        options.add_experimental_option("prefs", prefs)
-        
-        print("Launching Stealth Browser in Docker...")
-        driver = uc.Chrome(options=options)
-        
-        # --- BING SEARCH LOGIC TO BYPASS DATACENTER CAPTCHAs ---
-        print(f"Searching Bing for: {query}...")
-        search_url = f"https://www.bing.com/search?q={query.replace(' ', '+')}"
-        driver.get(search_url)
+            for r in search_results:
+                url = r.get('href')
+                if not url:
+                    continue
 
-        # 4. Wait for Bing's main search results container (ID is 'b_results')
-        try:
-            WebDriverWait(driver, 60).until(
-                EC.presence_of_element_located((By.ID, "b_results"))
-            )
-            print("Search results detected! Extracting links...")
-        except Exception as e:
-            print("Timed out waiting for search results. Bing might have blocked the IP or layout changed.")
-            return []
-            
-        print("Scrolling to load more results...")
-        for _ in range(5): 
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-        
-        # 5. Extract website links
-        websites = set()
-        seen_domains = set() 
-        
-        # Bing organic results are structured within 'li.b_algo h2 a' elements
-        links = driver.find_elements(By.CSS_SELECTOR, "li.b_algo h2 a")
-        
-        # Fallback to grab structural links if selectors shift layout
-        if not links:
-            links = driver.find_elements(By.XPATH, "//a[@href]")
-        
-        for link in links:
-            try:
-                url = link.get_attribute("href")
-                if url and "http" in url:
-                    # Ignore search engines, social platforms, and major directories
-                    if any(bad in url.lower() for bad in [
-                        'google.', 'bing.', 'microsoft.', 'facebook.', 'instagram.', 
-                        'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.'
-                    ]):
-                        continue
-                        
+                # Ignore search engines, social platforms, and major directories
+                if any(bad in url.lower() for bad in [
+                    'google.', 'bing.', 'duckduckgo.', 'facebook.', 'instagram.',
+                    'linkedin.', 'yelp.', 'practo.', 'yellowpages.', 'tripadvisor.',
+                    'youtube.com', 'wikipedia.org', 'microsoft.'
+                ]):
+                    continue
+
+                try:
                     clean_url = url.split("?")[0]
                     domain = urlparse(clean_url).netloc.replace('www.', '')
-                    
+
                     if domain and domain not in seen_domains:
                         seen_domains.add(domain)
                         websites.add(clean_url)
-                        
+
                         if len(websites) >= max_results:
                             break
-            except Exception:
-                continue
-                        
+                except Exception:
+                    continue
+
+        print(f"Found {len(websites)} unique websites from search.")
         return list(websites)
 
     except Exception as e:
         print(f"An error occurred in get_business_websites: {e}")
         return []
-        
-    finally:
-        # 6. SAFE CLEANUP: Only quit if the browser instance actually exists
-        if driver is not None:
-            try:
-                driver.quit()
-                print("Browser closed successfully.")
-            except:
-                pass
 
 def decode_cloudflare_email(encoded_string):
     """Decrypts Cloudflare obfuscated emails into plain text."""

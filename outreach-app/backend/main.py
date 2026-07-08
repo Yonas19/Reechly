@@ -42,7 +42,6 @@ class EmailRequest(BaseModel):
 
 
 @app.post("/api/scrape")
-@app.post("/api/scrape")
 def run_scraper(request: SearchRequest):
     try:
         sites = get_business_websites(request.query, max_results=request.max_results)
