@@ -69,17 +69,14 @@ export default function Home() {
       const data = await response.json();
 
       if (data.status === "success") {
-        const formattedLeads: Lead[] = [];
-        data.data.forEach((item: any) => {
-          item.emails.forEach((email: string) => {
-            formattedLeads.push({
-              id: email + item.website,
-              website: item.website,
-              email: email,
-              selected: true,
-            });
-          });
-        });
+        const formattedLeads: Lead[] = data.data.flatMap((item: any) =>
+          item.emails.map((email: string) => ({
+            id: email + item.website,
+            website: item.website,
+            email: email,
+            selected: true,
+          })),
+        );
         setLeads(formattedLeads);
         setStatusMessage(`Successfully found ${formattedLeads.length} leads.`);
         setStatusType("success");

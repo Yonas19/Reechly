@@ -21,6 +21,9 @@ def send_test_email():
         # 2. Connect to Gmail's SMTP server
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls() # Secure the connection
+        # 2. Connect to Gmail's SMTP server using port 465 and SMTP_SSL
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        # server.starttls() is not needed with SMTP_SSL
         
         # 3. Login and send
         server.login(SENDER_EMAIL, APP_PASSWORD)
