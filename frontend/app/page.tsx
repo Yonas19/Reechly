@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useReducer, useEffect } from "react";
 
 interface Lead {
   id: string;
@@ -9,100 +9,140 @@ interface Lead {
   selected: boolean;
 }
 
+type State = {
+  view: "landing" | "dashboard";
+  isMounted: boolean;
+  animateDashboard: boolean;
+  query: string;
+  maxResults: number;
+  leads: Lead[];
+  subject: string;
+  body: string;
+  statusMessage: string;
+  statusType: "info" | "success" | "error" | "";
+  isLoading: "scraping" | "sending" | false;
+};
+
+type Action =
+  | { type: "SET_VIEW"; payload: "landing" | "dashboard" }
+  | { type: "MOUNT" }
+  | { type: "ANIMATE_DASHBOARD"; payload: boolean }
+  | { type: "SET_FIELD"; field: keyof State; payload: any }
+  | { type: "START_SCRAPING" }
+  | { type: "SCRAPE_SUCCESS"; payload: Lead[] }
+  | { type: "SCRAPE_FAILURE"; payload: string }
+  | { type: "START_SENDING" }
+  | { type: "SEND_SUCCESS"; payload: string }
+  | { type: "SEND_FAILURE"; payload: string }
+  | { type: "TOGGLE_LEAD"; payload: string }
+  | { type: "TOGGLE_ALL_LEADS" }
+  | { type: "SET_STATUS"; payload: { message: string; type: State["statusType"] } };
+
+const initialState: State = {
+  view: "landing",
+  isMounted: false,
+  animateDashboard: false,
+  query: "",
+  maxResults: 10,
+  leads: [],
+  subject: "Automate Your Business & Save Hours Every Week",
+  body: "Hi there,\n\nI came across your website and loved your work. I wanted to reach out regarding a quick collaboration opportunity...\n\nBest,\nYonas",
+  statusMessage: "",
+  statusType: "",
+  isLoading: false,
+};
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "SET_VIEW":
+      return { ...state, view: action.payload };
+    case "MOUNT":
+      return { ...state, isMounted: true };
+    case "ANIMATE_DASHBOARD":
+      return { ...state, animateDashboard: action.payload };
+    case "SET_FIELD":
+      return { ...state, [action.field]: action.payload };
+    case "START_SCRAPING":
+      return { ...state, isLoading: "scraping", statusMessage: "Launching stealth engine...", statusType: "info" };
+    case "SCRAPE_SUCCESS":
+      return { ...state, isLoading: false, leads: action.payload, statusMessage: `Successfully found ${action.payload.length} leads.`, statusType: "success" };
+    case "SCRAPE_FAILURE":
+      return { ...state, isLoading: false, statusMessage: `Scraping failed: ${action.payload}`, statusType: "error" };
+    case "START_SENDING":
+      return { ...state, isLoading: "sending", statusMessage: "Dispatching campaign outbox...", statusType: "info" };
+    case "SEND_SUCCESS":
+      return { ...state, isLoading: false, statusMessage: action.payload, statusType: "success" };
+    case "SEND_FAILURE":
+      return { ...state, isLoading: false, statusMessage: action.payload, statusType: "error" };
+    case "TOGGLE_LEAD":
+      return { ...state, leads: state.leads.map(lead => lead.id === action.payload ? { ...lead, selected: !lead.selected } : lead) };
+    case "TOGGLE_ALL_LEADS":
+      const allSelected = state.leads.every(l => l.selected);
+      return { ...state, leads: state.leads.map(l => ({ ...l, selected: !allSelected })) };
+    case "SET_STATUS":
+      return { ...state, statusMessage: action.payload.message, statusType: action.payload.type };
+    default:
+      return state;
+  }
+}
+
 export default function Home() {
-  // Navigation View State: 'landing' or 'dashboard'
-  const [view, setView] = useState<"landing" | "dashboard">("landing");
-
-  // Animation States
-  const [isMounted, setIsMounted] = useState(false);
-  const [animateDashboard, setAnimateDashboard] = useState(false);
-
-  // Trigger landing page animation on mount
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-
-  // Trigger dashboard animation when view switches
-  useEffect(() => {
-    if (view === "dashboard") {
-      // Small timeout ensures the DOM node renders before applying transition classes
-      const timer = setTimeout(() => setAnimateDashboard(true), 50);
-      return () => clearTimeout(timer);
-    } else {
-      setAnimateDashboard(false);
-    }
-  }, [view]);
-
-  // Scraper State
-  const [query, setQuery] = useState("");
-  const [maxResults, setMaxResults] = useState(10);
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [isScraping, setIsScraping] = useState(false);
-
-  // Email State
-  const [subject, setSubject] = useState(
-    "Automate Your Business & Save Hours Every Week",
-  );
-  const [body, setBody] = useState(
-    "Hi there,\n\nI came across your website and loved your work. I wanted to reach out regarding a quick collaboration opportunity...\n\nBest,\nYonas",
-  );
-  const [isSending, setIsSending] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("");
-  const [statusType, setStatusType] = useState<
-    "info" | "success" | "error" | ""
-  >("");
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const { view, isMounted, animateDashboard, query, maxResults, leads, subject, body, statusMessage, statusType, isLoading } = state;
 
   const handleSearch = async () => {
-    setIsScraping(true);
-    setStatusMessage("Launching stealth engine...");
-    setStatusType("info");
+    dispatch({ type: "START_SCRAPING" });
     try {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/scrape`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, max_results: maxResults }),
+          body: JSON.stringify({ query: state.query, max_results: state.maxResults }),
         },
       );
+
+      if (!response.ok) {
+        let errorMessage = `Scraping request failed: ${response.statusText} (Status ${response.status})`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.detail || JSON.stringify(errorData);
+        } catch (e) {
+          // Response was not JSON, the status text is the best we have.
+        }
+        throw new Error(errorMessage);
+      }
 
       const data = await response.json();
 
       if (data.status === "success") {
-        const formattedLeads: Lead[] = data.data.flatMap((item: any) =>
+        const formattedLeads: Lead[] = data.data.flatMap((item: any) => (
           item.emails.map((email: string) => ({
             id: email + item.website,
             website: item.website,
             email: email,
             selected: true,
           })),
-        );
-        setLeads(formattedLeads);
-        setStatusMessage(`Successfully found ${formattedLeads.length} leads.`);
-        setStatusType("success");
+        ));
+        dispatch({ type: "SCRAPE_SUCCESS", payload: formattedLeads });
       } else {
-        setStatusMessage("Scraping failed: " + data.detail);
-        setStatusType("error");
+        // Handle cases where the server returns 200 OK but with an application-level error
+        dispatch({ type: "SCRAPE_FAILURE", payload: data.detail || "Scraping completed with an unknown error." });
       }
-    } catch (error) {
-      setStatusMessage("Could not connect to backend server.");
-      setStatusType("error");
+    } catch (error: any) {
+      dispatch({ type: "SCRAPE_FAILURE", payload: error.message || "Could not connect to backend server." });
     }
-    setIsScraping(false);
   };
 
   const handleSend = async () => {
-    const selectedEmails = leads.filter((l) => l.selected).map((l) => l.email);
+    const selectedEmails = state.leads.filter((l) => l.selected).map((l) => l.email);
 
     if (selectedEmails.length === 0) {
-      setStatusMessage("Please select at least one lead.");
-      setStatusType("error");
+      dispatch({ type: "SET_STATUS", payload: { message: "Please select at least one lead.", type: "error" } });
       return;
     }
 
-    setIsSending(true);
-    setStatusMessage("Dispatching campaign outbox...");
-    setStatusType("info");
+    dispatch({ type: "START_SENDING" });
 
     try {
       // FIX: Changed from localhost:8000 to the dynamic Vercel environment variable
@@ -113,50 +153,51 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             target_emails: selectedEmails,
-            subject,
-            body,
+            subject: state.subject,
+            body: state.body,
           }),
         },
       );
 
+      if (!response.ok) {
+        let errorMessage = `Email request failed: ${response.statusText} (Status ${response.status})`;
+        try {
+          // Try to parse a more specific error message from the JSON body
+          const errorData = await response.json();
+          errorMessage = errorData.detail || JSON.stringify(errorData);
+        } catch (e) {
+          // The error response wasn't JSON. The status text is the best we have.
+        }
+        throw new Error(errorMessage);
+      }
+
       const data = await response.json();
 
-      // Handle both successful responses and HTTP error responses that have a JSON body
-      if (response.ok) {
-        // Status in the range 200-299
-        let message = data.message;
-        // Append info about failed emails if the backend provides it
-        if (data.failed && data.failed.length > 0) {
-          message += ` ${data.failed.length} failed to send.`;
-        }
-        setStatusMessage(message);
-        setStatusType("success");
-      } else {
-        // Use the detailed error message from the backend if available
-        const errorMessage = data.detail || "Failed to deliver campaign.";
-        setStatusMessage(errorMessage);
-        setStatusType("error");
+      let message = data.message;
+      if (data.failed && data.failed.length > 0) {
+        message += ` ${data.failed.length} failed to send.`;
       }
-    } catch (error) {
-      setStatusMessage(
-        "A network error occurred. Could not connect to the server.",
-      );
-      setStatusType("error");
+      dispatch({ type: "SEND_SUCCESS", payload: message });
+    } catch (error: any) {
+      dispatch({ type: "SEND_FAILURE", payload: error.message || "A network error occurred. Could not connect to the server." });
     }
-    setIsSending(false);
-  };
-  const toggleLead = (id: string) => {
-    setLeads(
-      leads.map((lead) =>
-        lead.id === id ? { ...lead, selected: !lead.selected } : lead,
-      ),
-    );
   };
 
-  const toggleAllLeads = () => {
-    const allSelected = leads.every((l) => l.selected);
-    setLeads(leads.map((l) => ({ ...l, selected: !allSelected })));
-  };
+  // Trigger landing page animation on mount
+  useEffect(() => {
+    dispatch({ type: "MOUNT" });
+  }, []);
+
+  // Trigger dashboard animation when view switches
+  useEffect(() => {
+    if (view === "dashboard") {
+      // Small timeout ensures the DOM node renders before applying transition classes
+      const timer = setTimeout(() => dispatch({ type: "ANIMATE_DASHBOARD", payload: true }), 50);
+      return () => clearTimeout(timer);
+    } else {
+      dispatch({ type: "ANIMATE_DASHBOARD", payload: false });
+    }
+  }, [view]);
 
   return (
     <div className="relative min-h-screen text-slate-900 antialiased selection:bg-blue-500/10 overflow-x-hidden font-sans">
@@ -180,7 +221,7 @@ export default function Home() {
         >
           <div className="flex items-center justify-center gap-2">
             <span
-              className={`h-1.5 w-1.5 rounded-full ${isScraping || isSending ? "animate-ping" : ""} ${
+              className={`h-1.5 w-1.5 rounded-full ${isLoading ? "animate-ping" : ""} ${
                 statusType === "success"
                   ? "bg-emerald-500"
                   : statusType === "error"
@@ -211,7 +252,7 @@ export default function Home() {
               </span>
             </div>
             <button
-              onClick={() => setView("dashboard")}
+              onClick={() => dispatch({ type: "SET_VIEW", payload: "dashboard" })}
               className="text-xs font-medium bg-white hover:bg-slate-50 border border-slate-200 shadow-sm px-4 py-2 rounded-xl transition-all active:scale-95"
             >
               Sign In
@@ -239,7 +280,7 @@ export default function Home() {
 
             <div className="pt-4">
               <button
-                onClick={() => setView("dashboard")}
+                onClick={() => dispatch({ type: "SET_VIEW", payload: "dashboard" })}
                 className="group relative bg-black hover:bg-slate-800 text-white text-sm px-8 py-4 rounded-xl font-medium shadow-xl shadow-black/10 transition-all transform active:scale-95 overflow-hidden inline-flex items-center gap-2"
               >
                 <span>Get Started</span>
@@ -319,7 +360,7 @@ export default function Home() {
             <div>
               <div className="flex items-center gap-2.5">
                 <button
-                  onClick={() => setView("landing")}
+                  onClick={() => dispatch({ type: "SET_VIEW", payload: "landing" })}
                   className="mr-1 p-1.5 rounded-lg hover:bg-slate-200/60 transition-colors text-slate-400 hover:text-slate-700 group"
                   title="Return to Landing Page"
                 >
@@ -391,7 +432,7 @@ export default function Home() {
                       placeholder="e.g., Real estate agencies in Dubai"
                       className="w-full bg-slate-50/50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all"
                       value={query}
-                      onChange={(e) => setQuery(e.target.value)}
+                      onChange={(e) => dispatch({ type: "SET_FIELD", field: "query", payload: e.target.value })}
                     />
                   </div>
 
@@ -399,7 +440,7 @@ export default function Home() {
                     <select
                       className="bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all text-slate-600 cursor-pointer"
                       value={maxResults}
-                      onChange={(e) => setMaxResults(Number(e.target.value))}
+                      onChange={(e) => dispatch({ type: "SET_FIELD", field: "maxResults", payload: Number(e.target.value) })}
                     >
                       <option value={10}>10 records</option>
                       <option value={20}>20 records</option>
@@ -408,10 +449,10 @@ export default function Home() {
 
                     <button
                       onClick={handleSearch}
-                      disabled={isScraping || !query}
+                      disabled={!!isLoading || !query}
                       className="bg-black hover:bg-slate-800 active:bg-slate-900 text-white text-sm px-6 py-2.5 rounded-xl font-medium disabled:opacity-40 shadow-md shadow-black/10 transition-all flex items-center gap-2 whitespace-nowrap transform active:scale-95"
                     >
-                      {isScraping ? "Extracting..." : "Run Scraper"}
+                      {isLoading === 'scraping' ? "Extracting..." : "Run Scraper"}
                     </button>
                   </div>
                 </div>
@@ -429,7 +470,7 @@ export default function Home() {
                                 leads.length > 0 &&
                                 leads.every((l) => l.selected)
                               }
-                              onChange={toggleAllLeads}
+                              onChange={() => dispatch({ type: "TOGGLE_ALL_LEADS" })}
                               className="w-4 h-4 text-black border-slate-300 rounded focus:ring-black/20 focus:ring-offset-0 cursor-pointer transition-all"
                             />
                           </th>
@@ -448,7 +489,7 @@ export default function Home() {
                               colSpan={3}
                               className="px-4 py-32 text-center text-slate-400 text-xs max-w-md mx-auto"
                             >
-                              {isScraping ? (
+                              {isLoading === 'scraping' ? (
                                 <div className="space-y-3 animate-pulse">
                                   <div className="mx-auto h-8 w-8 rounded-full border-2 border-slate-300 border-t-black animate-spin"></div>
                                   <p className="font-medium text-slate-600">
@@ -470,7 +511,7 @@ export default function Home() {
                                 <input
                                   type="checkbox"
                                   checked={lead.selected}
-                                  onChange={() => toggleLead(lead.id)}
+                                  onChange={() => dispatch({ type: "TOGGLE_LEAD", payload: lead.id })}
                                   className="w-4 h-4 text-black border-slate-300 rounded focus:ring-black/20 focus:ring-offset-0 cursor-pointer transition-all"
                                 />
                               </td>
@@ -528,7 +569,7 @@ export default function Home() {
                       type="text"
                       className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all font-medium text-slate-800"
                       value={subject}
-                      onChange={(e) => setSubject(e.target.value)}
+                      onChange={(e) => dispatch({ type: "SET_FIELD", field: "subject", payload: e.target.value })}
                     />
                   </div>
 
@@ -539,7 +580,7 @@ export default function Home() {
                     <textarea
                       className="w-full flex-1 bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none resize-none min-h-[300px] text-slate-700 leading-relaxed font-sans"
                       value={body}
-                      onChange={(e) => setBody(e.target.value)}
+                      onChange={(e) => dispatch({ type: "SET_FIELD", field: "body", payload: e.target.value })}
                     />
                   </div>
                 </div>
@@ -548,12 +589,12 @@ export default function Home() {
                   <button
                     onClick={handleSend}
                     disabled={
-                      isSending || leads.filter((l) => l.selected).length === 0
+                      !!isLoading || leads.filter((l) => l.selected).length === 0
                     }
                     className="relative w-full overflow-hidden bg-black hover:bg-slate-800 active:bg-slate-900 text-white text-sm py-3.5 rounded-xl font-medium shadow-lg shadow-black/10 disabled:opacity-40 transition-all flex items-center justify-center gap-2 transform active:scale-[0.98] group"
                   >
                     <span className="relative z-10 flex items-center gap-2">
-                      {isSending ? (
+                      {isLoading === 'sending' ? (
                         <>
                           <div className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
                           Executing Sequence...
